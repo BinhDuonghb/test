@@ -190,7 +190,7 @@ namespace Login.Services
                 }, out SecurityToken securityToken);
                 if (securityToken is JwtSecurityToken token && token.Header.Alg.Equals(SecurityAlgorithms.HmacSha256))
                 {
-                    string? userId = principal.Identity?.Name;
+                    string userId = principal.Identity.Name;
                     if (userId == null) return new TokenResponse { Success = false };
                     var user = await _userManager.FindByIdAsync(userId);
                     if (user == null) return new TokenResponse { Success = false };
