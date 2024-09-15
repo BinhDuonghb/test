@@ -1,6 +1,6 @@
 ﻿using Login.models.Aplication;
+using Login.models.Reponse;
 using Login.models.Request;
-using MongoDbIdentity.Dtos;
 
 namespace Login.Services
 {
@@ -10,5 +10,8 @@ namespace Login.Services
         Task<RegisterResponse> Register(RegisterRequest request);
         Task<string> GenerateToken(AUser user);
         Task<TokenResponse> RefreshToken(RefreshTokenRequest request);
+        Task<UserResponse> GetCurrentUser(string accessToken);
+
+        DecodeTokenResponse ValidateToken(string accessToken);
     }
 }

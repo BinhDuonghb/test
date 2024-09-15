@@ -1,4 +1,4 @@
-﻿namespace MongoDbIdentity.Dtos
+﻿namespace Login.models.Reponse
 {
     public class RegisterResponse
     {

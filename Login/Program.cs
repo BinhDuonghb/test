@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using Login.Services;
+using Login.Hubs;
+using Microsoft.AspNetCore.Builder;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -24,8 +26,11 @@ builder.Services.Configure<JwtSetting>(builder.Configuration.GetSection("JwtSett
 builder.Services.AddSingleton<IDatabase>(sp => sp.GetRequiredService<IOptions<Database>>().Value);
 builder.Services.AddSingleton<IMongoClient>(s => new MongoClient(builder.Configuration.GetValue<string>("Database:ConnectionString")));
 builder.Services.AddScoped<IUserManagerS, UserManagerS>();
+builder.Services.AddSignalR();
 var _authen = builder.Configuration.GetValue<string>("JwtSettings:securityKey") ?? "default_security_key";
 var database = builder.Configuration.GetSection("Database").Get<Database>();
+
+
 
 var mongodbConfig = new MongoDbIdentityConfiguration
 {
@@ -81,16 +86,17 @@ builder.Services.AddSwaggerGen();
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
 
+app.UseSwagger();
+app.UseSwaggerUI();
+
+app.UseCors();
 app.UseHttpsRedirection();
 app.UseAuthentication();
 app.UseAuthorization();
 
+
 app.MapControllers();
+app.MapHub<ChatHub>("chat");
 
 app.Run();

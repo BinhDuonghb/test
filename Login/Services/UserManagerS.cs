@@ -2,13 +2,13 @@
 using AspNetCore.Identity.MongoDbCore.Models;
 using Login.models.Aplication;
 using Login.models.MongoCollection;
+using Login.models.Reponse;
 using Login.models.Request;
 using Login.models.setting;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using MongoDB.Driver;
-using MongoDbIdentity.Dtos;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -33,24 +33,22 @@ namespace Login.Services
         {
             try
             {
-                var user = await _userManager.FindByEmailAsync(request.Email);
+                var user = await _userManager.FindByNameAsync(request.StudentCode);
                 if (user == null)
                 {
                     return new LoginResponse()
                     {
-                        Message = "Invalid Email/password",
+                        Message = "Invalid StudentCode/password",
                         Success = false
                     };
                 }
-
+                var token = await GenerateToken(user);
+                await ReGenerateToken(user);
                 return new LoginResponse
                 {
-                    AccessToken = await GenerateToken(user),
-                    RefreshToken =await ReGenerateToken(user),
+                    AccessToken = token,
                     Success = true,
                     Message = "Login Success full",
-                    UserId = user?.Id.ToString(),
-                    Email = user?.Email
                 };
             }
             catch (Exception e)
@@ -84,7 +82,9 @@ namespace Login.Services
                 user = new AUser
                 {
                     Email = request.Email,
-                    UserName = request.UserName,
+                    UserName = request.StudentCode,
+                    FullName = request.FullName,
+                    PhoneNumber = request.PhoneNumber
                 };
                 var created = await _userManager.CreateAsync(user, request.Password);
                 if (!created.Succeeded)
@@ -109,10 +109,12 @@ namespace Login.Services
                 var claims = new List<Claim>
                 {
                     new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-                    new Claim(ClaimTypes.Name, user.Id.ToString()),
+                    new Claim(ClaimTypes.Name, user.UserName),
                     new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())
+                    new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 };
+
+
                 var setCaim = await _userManager.AddClaimsAsync(user, claims);
                 if (!setCaim.Succeeded)
                 {
@@ -169,61 +171,49 @@ namespace Login.Services
             var existion = await _refreshToken.Find(t => t.UserId == user.Id.ToString()).FirstOrDefaultAsync();
             if (existion == null) {
                 await _refreshToken.InsertOneAsync(new RefreshToken { AccessToken = tokenHandler.WriteToken(token), UserId = user.Id.ToString() });
-            } 
+            }
+            else
+            {
+                var update = Builders<RefreshToken>.Update.Set(t => t.AccessToken, tokenHandler.WriteToken(token));
+                await _refreshToken.UpdateOneAsync(t => t.UserId == existion.UserId, update);
+            };
 
 
             return tokenHandler.WriteToken(token);
         }
         public async Task<TokenResponse> RefreshToken(RefreshTokenRequest request)
         {
+
             var refreshToken = await _refreshToken.Find(item => item.RefreshTo == request.RefreshToken).FirstOrDefaultAsync();
             if (refreshToken != null)
             {
-                var tokenHandler = new JwtSecurityTokenHandler();
-                var tokenKey = Encoding.UTF8.GetBytes(_jwtSetting.SecurityKey);
-                var principal = tokenHandler.ValidateToken(request.AccessToken, new TokenValidationParameters()
+                var principal = ValidateToken(refreshToken.AccessToken);
+                if (!principal.Success) return new TokenResponse { Success = false , Message = principal.Message };
+                string userId = principal.ClaimsPrincipal?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+                if (userId == null) return new TokenResponse { Success = false ,Message = "Can't not found userId in jwt"};
+                var user = await _userManager.FindByIdAsync(userId);
+                if (user == null) return new TokenResponse { Success = false , Message = $"Can't find the user with Id of {userId}" };
+                var _exsitdata = await _refreshToken.Find(t => t.UserId == userId && t.RefreshTo == request.RefreshToken).FirstOrDefaultAsync();
+                if (_exsitdata != null)
                 {
-                    ValidateIssuerSigningKey = true,
-                    ValidateIssuer = false,
-                    ValidateAudience = false,
-                    IssuerSigningKey = new SymmetricSecurityKey(tokenKey)
-                }, out SecurityToken securityToken);
-                if (securityToken is JwtSecurityToken token && token.Header.Alg.Equals(SecurityAlgorithms.HmacSha256))
-                {
-                    string userId = principal.Identity.Name;
-                    if (userId == null) return new TokenResponse { Success = false };
-                    var user = await _userManager.FindByIdAsync(userId);
-                    if (user == null) return new TokenResponse { Success = false };
-                    var _exsitdata = await _refreshToken.Find(t => t.UserId == userId && t.RefreshTo == request.RefreshToken).FirstOrDefaultAsync();
-                    if (_exsitdata != null)
+                        
+                    var finalToken = await GenerateToken(user);
+                    return new TokenResponse()
                     {
-                        var toke = new JwtSecurityToken(
-                            claims: principal.Claims.ToArray(),
-                            expires: DateTime.Now.AddSeconds(30),
-                            signingCredentials: new SigningCredentials(new SymmetricSecurityKey(tokenKey),
-                            SecurityAlgorithms.HmacSha256)
-                            );
-                        var finalToken = tokenHandler.WriteToken(toke);
-                        return new TokenResponse()
-                        {
-                            Token = finalToken,
-                            Refresh = await ReGenerateToken(user),
-                            Success = true
-                        };
-                    }
-                    else
-                    {
-                        return new TokenResponse { Success = false };
-                    }
+                        Token = finalToken,
+                        Refresh = await ReGenerateToken(user),
+                        Success = true
+                    };
                 }
                 else
                 {
-                    return new TokenResponse { Success = false };
+                    return new TokenResponse { Success = false, Message = "Can't find the owner of this token" };
                 }
+
             }
             else
             {
-                return new TokenResponse { Success = false };
+                return new TokenResponse { Success = false, Message = "Refresh Token Not Found" };
             }
         }
         private async Task<string> ReGenerateToken(AUser user)
@@ -250,6 +240,51 @@ namespace Login.Services
                 });
             }
             return refreshtoken;
+        }
+        public async Task<UserResponse> GetCurrentUser(string accessToken)
+        {
+            var decodeValue = ValidateToken(accessToken);
+            if (!decodeValue.Success)
+                return new UserResponse { Success = false, Message = decodeValue.Message };
+
+            var userIdClaim = decodeValue.ClaimsPrincipal?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+
+            if (string.IsNullOrEmpty(userIdClaim))
+                return new UserResponse { Success = false, Message = "Can't find the owner of this token" };
+
+            var user = await _userManager.FindByIdAsync(userIdClaim);
+            if (user == null)
+                return new UserResponse { Success = false, Message = "Can't find the owner of this token" };
+            string[] nameParts = user.FullName.Split(' ');
+
+            return new UserResponse { Email = user.Email, StudentCode = user.UserName , LastName = nameParts[0] ,FirstName= string.Join(" ", nameParts.Skip(1)), Success = true };
+        }
+        public DecodeTokenResponse ValidateToken(string accessToken)
+        {
+            var tokenHandler = new JwtSecurityTokenHandler();
+            var tokenKey = Encoding.UTF8.GetBytes(_jwtSetting.SecurityKey);
+            try
+            {
+                var principal = tokenHandler.ValidateToken(accessToken, new TokenValidationParameters()
+                {
+                    ValidateIssuerSigningKey = true,
+                    ValidateIssuer = false,
+                    ValidateAudience = false,
+                    ValidateLifetime = false,
+                    IssuerSigningKey = new SymmetricSecurityKey(tokenKey)
+                }, out SecurityToken securityToken);
+
+                if (securityToken is JwtSecurityToken token && token.Header.Alg.Equals(SecurityAlgorithms.HmacSha256))
+                {
+                    if (token.ValidTo < DateTime.UtcNow) return new DecodeTokenResponse { Success = false, Message = "Token is expired" };
+                    return new DecodeTokenResponse { Success = true, ClaimsPrincipal = principal } ;
+                }
+                return new DecodeTokenResponse { Success = false, Message = "Token is not match our Algorithms"}; 
+            }
+            catch (Exception ex)
+            {
+                return new DecodeTokenResponse { Success = false, Message = ex.Message };
+            }
         }
 
     }

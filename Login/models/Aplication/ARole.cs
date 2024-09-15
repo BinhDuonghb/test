@@ -6,5 +6,6 @@ namespace Login.models.Aplication
     [CollectionName("role")]
     public class ARole : MongoIdentityRole<Guid>
     {
+
     }
 }
