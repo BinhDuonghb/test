@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 
 namespace Login.Controllers
-{   
+{
     [Route("api/operations")]
     [ApiController]
     public class OperationsController : ControllerBase
